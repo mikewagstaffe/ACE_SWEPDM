@@ -594,4 +594,72 @@ Public Class ManagedACEProject
             Throw New Exception("Failed To Create The AutoCAD Electrical Project Folder", ex)
         End Try
     End Sub
+
+
+
+    Private Sub UpdateAttribute(ByVal BlockName As String, ByVal AttbMap As Hashtable)
+        Dim db As Database = Application.DocumentManager.MdiActiveDocument.Database
+        UPdateAttributesInDatabase(db, BlockName, AttbMap)
+    End Sub
+    
+    Private Sub UPdateAttributesInDatabase(ByVal db As Database, ByVal BlockName As String, ByVal AttbMap As Hashtable)
+        Dim msID As ObjectId = Nothing
+        Dim psID As ObjectId = Nothing
+
+        Dim tr As Transaction = db.TransactionManager.StartTransaction()
+        Using tr
+            Dim bt As BlockTable = CType(tr.GetObject(db.BlockTableId, OpenMode.ForRead), BlockTable)
+            msID = bt(BlockTableRecord.ModelSpace)
+            psID = bt(BlockTableRecord.PaperSpace)
+            tr.Commit()
+        End Using
+
+        Dim msCount As Integer = UpdateAttributesInBlock(msID, AttbMap, BlockName)
+        Dim psCount As Integer = UpdateAttributesInBlock(psID, AttbMap, BlockName)
+    End Sub
+
+    Private Function UpdateAttributesInBlock(ByVal btrId As ObjectId, ByVal attbMap As Hashtable, ByVal blockName As String) As Integer
+        Dim changedCount As Integer = 0
+        Dim doc As Document = Application.DocumentManager.MdiActiveDocument
+        Dim db As Database = doc.Database
+
+        Dim tr As Transaction = doc.TransactionManager.StartTransaction()
+        Using tr
+            Dim btr As BlockTableRecord = CType(tr.GetObject(btrId, OpenMode.ForRead), BlockTableRecord)
+
+            For Each entId As ObjectId In btr
+                Dim ent As Entity = TryCast(tr.GetObject(entId, OpenMode.ForRead), Entity)
+                If ent IsNot Nothing Then
+                    Dim br As BlockReference = TryCast(ent, BlockReference)
+                    If br IsNot Nothing Then
+                        Dim bd As BlockTableRecord = CType(tr.GetObject(br.BlockTableRecord, OpenMode.ForRead), BlockTableRecord)
+                        'Check ownerID for layout info
+                        If String.Compare(bd.Name, blockName, True) = 0 Then
+                            For Each arId As ObjectId In br.AttributeCollection
+                                Dim obj As DBObject = tr.GetObject(arId, OpenMode.ForRead)
+                                Dim ar As AttributeReference = TryCast(obj, AttributeReference)
+                                If ar IsNot Nothing Then
+                                    For Each attbName As String In attbMap.Keys
+                                        If String.Compare(ar.Tag, attbName, True) = 0 Then
+                                            ar.UpgradeOpen()
+                                            ar.TextString = attbMap(attbName).ToString()
+                                            Dim wdb As Database = HostApplicationServices.WorkingDatabase
+                                            HostApplicationServices.WorkingDatabase = db
+                                            ar.AdjustAlignment(db)
+                                            HostApplicationServices.WorkingDatabase = wdb
+                                            ar.DowngradeOpen()
+                                            changedCount += 1
+                                        End If
+                                    Next
+                                End If
+                            Next
+                        End If
+                        changedCount += UpdateAttributesInBlock(br.BlockTableRecord, attbMap, blockName)
+                    End If
+                End If
+            Next
+            tr.Commit()
+        End Using
+        Return changedCount
+    End Function
 End Class
