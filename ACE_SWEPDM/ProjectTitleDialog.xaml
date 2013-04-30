@@ -1,0 +1,21 @@
+﻿<Window x:Class="AddinDialogs.ProjectTitleDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" 
+    xmlns:local="clr-namespace:AddinDialogs"
+    Title="New Project Short Name" Height="223" Width="370" ResizeMode="NoResize" ShowInTaskbar="False" 
+    WindowStartupLocation="CenterOwner" FocusManager.FocusedElement="{Binding ElementName=tbShortTitle}" Activated="Window_Activated_1" Topmost="True">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="46*"/>
+            <ColumnDefinition Width="161*"/>
+            <ColumnDefinition Width="17*"/>
+            <ColumnDefinition Width="138*"/>
+        </Grid.ColumnDefinitions>
+        <TextBlock HorizontalAlignment="Left" Height="57" Margin="10,10,0,0" TextWrapping="Wrap" Text="Enter a short title to be used as the project name. This does not have to be unique, as it is only used to identify the project in AutoCAD." VerticalAlignment="Top" Width="342" TextAlignment="Center" Grid.ColumnSpan="4"/>
+        <TextBlock HorizontalAlignment="Left" Height="43" Margin="10,67,0,0" TextWrapping="Wrap" Text="Leaving the field empty will set the  name to the unique part number for the project. Note: This cannot be changed later." VerticalAlignment="Top" Width="342" TextAlignment="Center" Grid.ColumnSpan="4"/>
+        <TextBox Name="tbShortTitle" HorizontalAlignment="Left" Height="23" Margin="10,115,0,0" TextWrapping="Wrap" VerticalAlignment="Top" Width="342" Grid.ColumnSpan="4">
+        </TextBox>
+        <Button Content="OK" HorizontalAlignment="Left" Margin="86,161,0,0" VerticalAlignment="Top" Width="75" RenderTransformOrigin="0.4,-0.636" Grid.Column="1" Click="Button_Click" IsDefault="True"/>
+
+    </Grid>
+</Window>

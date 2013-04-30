@@ -9,9 +9,9 @@ Imports System.Runtime.InteropServices
 ' associated with an assembly.
 <Assembly: AssemblyTitle("ACE_SWEPDM")> 
 <Assembly: AssemblyDescription("")> 
-<Assembly: AssemblyCompany("HP")> 
+<Assembly: AssemblyCompany("Ishida")> 
 <Assembly: AssemblyProduct("ACE_SWEPDM")> 
-<Assembly: AssemblyCopyright("Copyright © HP 2013")> 
+<Assembly: AssemblyCopyright("Copyright © M.Wagstaffe 2013")> 
 <Assembly: AssemblyTrademark("")> 
 
 ' Version information for an assembly consists of the following four values:

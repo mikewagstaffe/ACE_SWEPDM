@@ -42,7 +42,7 @@ Friend Class PluginCommands
     Friend Shared ReadOnly Property ResourceManager() As Global.System.Resources.ResourceManager
         Get
             If Object.ReferenceEquals(resourceMan, Nothing) Then
-                Dim temp As Global.System.Resources.ResourceManager = New Global.System.Resources.ResourceManager("ACE_SWEPDM.PluginCommands", GetType(PluginCommands).Assembly)
+                Dim temp As Global.System.Resources.ResourceManager = New Global.System.Resources.ResourceManager("PluginCommands", GetType(PluginCommands).Assembly)
                 resourceMan = temp
             End If
             Return resourceMan
