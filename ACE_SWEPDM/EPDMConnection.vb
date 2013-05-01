@@ -975,6 +975,15 @@ Public Class EPDMConnection
         Return Success
     End Function
 
+    Public ReadOnly Property LoggedInUser As String
+        Get
+            If edmCurrentUser Is Nothing Then Return ""
+
+            Return edmCurrentUser.FullName
+        End Get
+    End Property
+
+
     Public ReadOnly Property VaultRootFolder() As String
         Get
             Return edmVault.RootFolderPath

@@ -11,6 +11,10 @@ Imports System.Xml.XPath
 Public Class ManagedACEProject
 
     Private Const csClasificationImage As String = "AcadProjectImg.png"
+    Private Const csTitleBlockName As String = "ISHDA STANDARD BORDER"
+    Private Const csTitlePageBlockName As String = "TITLEBLOCK"
+    Private Const csInfoBlockName As String = "INFOBLOCK"
+
     Private ClassificationInfo As OntologyStudioData = Nothing
     Private ConnectionMgr As ConnectionManager = Nothing
     Private EPDMItemID As Integer = -1
@@ -19,8 +23,6 @@ Public Class ManagedACEProject
     Private PartNumberPattern As String = "*"
     Private ProjectTitle As String = ""
     Private ProjectFolder As String = ""
-    Private ReportProgress As Boolean = False
-    Private ProgressWorker As BackgroundWorker = Nothing
     Private CurrentOperationProgress As Integer = 0
     Private ProjectExists As Boolean = False
     Private DrawingsList As List(Of String) = Nothing
@@ -115,10 +117,14 @@ Public Class ManagedACEProject
             'List All the drawings In the Project
             ListDrawings()
 
+            'Make sure all files created are added to the vault
+            AddAllFilesToEpdm()
+
             'Now need to update the title blocks of all the drawings in the project
             Dim AttributeMaps As Hashtable = MapPDMVariables()
             If AttributeMaps IsNot Nothing Then
-                UpdateTitleBlock(AttributeMaps)
+                UpdateTitleBlocks(AttributeMaps)
+                UpdateTitlePages(True, True, False)
             End If
 
         Catch ex As Exception
@@ -128,10 +134,211 @@ Public Class ManagedACEProject
 
     End Sub
 
-    Private Sub UpdateTitleBlock(ByVal AttributeMap As Hashtable)
+    ''' <summary>
+    ''' Just runs A Check In and check out on a new ACE project to ensure all files have been added into the vault 
+    ''' </summary>
+    ''' <remarks></remarks>
+    Private Sub FirstCheckInACEProjectFiles()
+        Dim EpdmConn As EPDMConnection = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection)
+        If EpdmConn IsNot Nothing Then
+            Dim FileIDs As List(Of Integer) = New List(Of Integer)
+            For Each ProjectDrawing As String In DrawingsList
+                Dim FileID As Integer = EpdmConn.FetchDocumentID(ProjectDrawing)
+                If FileID > 0 Then
+                    FileIDs.Add(FileID)
+                End If
+            Next
+            'Wdp file
+            Dim WdpFileID As Integer = EpdmConn.FetchDocumentID(FullProjectName)
+            If WdpFileID > -1 Then
+                FileIDs.Add(WdpFileID)
+            End If
+            'Directory Listingn for other project files
 
+            Dim di As New IO.DirectoryInfo(IO.Path.GetDirectoryName(FullProjectName))
+            For Each ListedFile As IO.FileInfo In di.GetFiles()
+                If String.Compare(ListedFile.Extension, ".dsd", True) = 0 Or String.Compare(ListedFile.Extension, ".loc", True) = 0 Or String.Compare(ListedFile.Extension, ".inst", True) = 0 Or String.Compare(ListedFile.Extension, ".wdl", True) = 0 Then
+                    Dim FileID As Integer = EpdmConn.FetchDocumentID(ListedFile.FullName)
+                    If FileID > -1 Then
+                        FileIDs.Add(FileID)
+                    End If
+                End If
+            Next
+            EpdmConn.CheckInFiles(FileIDs, False)
+        End If
     End Sub
 
+    ''' <summary>
+    ''' Checks If All Valid files are added to the vault for this project
+    ''' </summary>
+    ''' <remarks></remarks>
+    Private Sub AddAllFilesToEpdm()
+        Dim EpdmConn As EPDMConnection = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection)
+        If EpdmConn IsNot Nothing Then
+            For Each ProjectDrawing As String In DrawingsList
+                Dim FileID As Integer = EpdmConn.FetchDocumentID(ProjectDrawing)
+                If FileID = -1 Then
+                    'Not added So add it
+                    EpdmConn.AddFileToVault(ProjectDrawing, IO.Path.GetDirectoryName(ProjectDrawing), "")
+                End If
+            Next
+            'Test Wdp file
+            Dim WdpFileID As Integer = EpdmConn.FetchDocumentID(FullProjectName)
+            If WdpFileID = -1 Then
+                EpdmConn.AddFileToVault(FullProjectName, IO.Path.GetDirectoryName(FullProjectName), "")
+            End If
+            'Directory Listing
+
+            Dim di As New IO.DirectoryInfo(IO.Path.GetDirectoryName(FullProjectName))
+            For Each ListedFile As IO.FileInfo In di.GetFiles()
+                If String.Compare(ListedFile.Extension, ".dsd", True) = 0 Or String.Compare(ListedFile.Extension, ".loc", True) = 0 Or String.Compare(ListedFile.Extension, ".inst", True) = 0 Or String.Compare(ListedFile.Extension, ".wdl", True) = 0 Then
+                    Dim FileID As Integer = EpdmConn.FetchDocumentID(ListedFile.FullName)
+                    If FileID = -1 Then
+                        'Not added So add it
+                        EpdmConn.AddFileToVault(ListedFile.FullName, IO.Path.GetDirectoryName(FullProjectName), "")
+                    End If
+                End If
+            Next
+        End If
+    End Sub
+
+    ''' <summary>
+    ''' Updates the Title Page Information Blocks On The project
+    ''' </summary>
+    ''' <param name="NewProject"> Set To True If this is a new project, this causes the first time parameters to be set</param>
+    ''' <param name="UpdatedProject">Set To True To Update The Project Dates And time</param>
+    ''' <remarks></remarks>
+    Private Sub UpdateTitlePages(Optional ByVal NewProject As Boolean = True, Optional ByVal UpdatedProject As Boolean = True, Optional ByVal SetCADData As Boolean = False)
+        Dim AttributeMap As Hashtable = New Hashtable()
+
+        If SetCADData Then
+            'Prompt The User To Provide Deatails
+            'Set values from Dialog
+            AttributeMap.Add("PWR", "")
+            AttributeMap.Add("DESCRIPTION", "")
+            AttributeMap.Add("CUSTOMER", "")
+            AttributeMap.Add("FREQ", "")
+            AttributeMap.Add("CSA", "")
+            AttributeMap.Add("AVE_LOAD", "")
+            AttributeMap.Add("PEAK_LOAD", "")
+            AttributeMap.Add("PHASE", "")
+            AttributeMap.Add("VOLTAGE", "")
+            AttributeMap.Add("RATING", "")
+        End If
+
+        If NewProject Then
+            'We are not running this on a new project
+            'Is a new project so just populate the non editable fields
+            AttributeMap.Add("CREATED_BY", DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).LoggedInUser.ToUpper())
+            AttributeMap.Add("CREATED_ON", System.DateTime.Now.ToShortDateString())
+            AttributeMap.Add("DRAWING_NUM", ClassificationInfo.Name)
+            AttributeMap.Add("PROJECT_NAME", ClassificationInfo.Description)
+        End If
+
+        If UpdatedProject Then 'The project has been updated so set update details
+            AttributeMap.Add("PAGE_COUNT", GetSheetMax().ToString())
+            AttributeMap.Add("MOD_BY", DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).LoggedInUser.ToUpper())
+            AttributeMap.Add("LAST_MOD", System.DateTime.Now.ToShortDateString())
+            AttributeMap.Add("PROJECT_NUMBER", GetProjectNumber())
+        End If
+
+        'The title pages should always be on the GD01 and GD02 Drawings
+        Try
+            For Each ProjectDrawing As String In DrawingsList
+                If ProjectDrawing.ToUpper().Contains("GD01") Or ProjectDrawing.ToUpper().Contains("GD02") Then
+                    Dim db As Database = New Database(False, True)
+
+                    If db Is Nothing Then Throw New Exception("Failed to obtain Drawing Database")
+                    Using db
+                        db.ReadDwgFile(ProjectDrawing, IO.FileShare.ReadWrite, False, "")
+                        UpdateAttributesInDatabase(db, csTitlePageBlockName, AttributeMap)
+                        UpdateAttributesInDatabase(db, csInfoBlockName, AttributeMap)
+                        db.SaveAs(ProjectDrawing, DwgVersion.Newest)
+                    End Using
+                End If
+
+            Next
+        Catch ex As Exception
+            Throw New Exception("Error Updating Title Page Blocks in Project")
+        End Try
+    End Sub
+
+    ''' <summary>
+    ''' Gets The Sheet Count For this Project
+    ''' </summary>
+    ''' <returns>The sheet Count For the Project</returns>
+    ''' <remarks></remarks>
+    Private Function GetSheetMax() As Integer
+        Try
+            If Not ProjectExists Then Return -1
+
+            Dim rb As ResultBuffer = New ResultBuffer()
+            rb.Add(New TypedValue(Autodesk.AutoCAD.Runtime.LispDataType.Text, "c:wd_proj_wdp_data_fnam"))
+            rb.Add(New TypedValue(Autodesk.AutoCAD.Runtime.LispDataType.Text, FullProjectName.Replace("\", "/")))
+            Dim Res_rb As ResultBuffer = Application.Invoke(rb)
+            Dim resultArray As TypedValue() = Res_rb.AsArray()
+            Dim Count As Integer = -1
+            Integer.TryParse(resultArray(0).Value.ToString(), Count)
+            Return Count
+        Catch ex As Exception
+            Throw New Exception("Failed Obtaining Drawing Count", ex)
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' Gets the Project Number for the project, this is the only title set with the Autocad project titles
+    ''' </summary>
+    ''' <returns>Project title or empty string</returns>
+    ''' <remarks>Not tested</remarks>
+    Private Function GetProjectNumber() As String
+        Try
+            If Not ProjectExists Then Return ""
+
+            Dim rb As ResultBuffer = New ResultBuffer()
+            rb.Add(New TypedValue(Autodesk.AutoCAD.Runtime.LispDataType.Text, "c:wd_proj_wdp_data_fnam"))
+            rb.Add(New TypedValue(Autodesk.AutoCAD.Runtime.LispDataType.Text, FullProjectName.Replace("\", "/")))
+            Dim Res_rb As ResultBuffer = Application.Invoke(rb)
+            Dim resultArray As TypedValue() = Res_rb.AsArray()
+            Dim TitlesList As TypedValue() = Nothing
+            LispNth(resultArray, 1, TitlesList)
+            If TitlesList IsNot Nothing Then
+                If TitlesList.Length >= 2 Then
+                    Return TitlesList(1).Value.ToString()
+                End If
+            End If
+            Return ""
+        Catch ex As Exception
+            Throw New Exception("Failed Obtaining Drawing Count", ex)
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' Updates The Basic Title Block Information On All Valid Drawings in the project
+    ''' </summary>
+    ''' <param name="AttributeMap">A Mapped Table of Attributes and Values</param>
+    ''' <remarks>Should Only be used when creating a new project, as this function sets the basic title block information</remarks>
+    Private Sub UpdateTitleBlocks(ByVal AttributeMap As Hashtable)
+        Try
+            For Each ProjectDrawing As String In DrawingsList
+                Dim db As Database = New Database(False, True)
+
+                If db Is Nothing Then Throw New Exception("Failed to obtain Drawing Database")
+                Using db
+                    db.ReadDwgFile(ProjectDrawing, IO.FileShare.ReadWrite, False, "")
+                    UpdateAttributesInDatabase(db, csTitleBlockName, AttributeMap)
+                    db.SaveAs(ProjectDrawing, DwgVersion.Newest)
+                End Using
+            Next
+        Catch ex As Exception
+            Throw New Exception("Error Updating Title Blocks in Project")
+        End Try
+    End Sub
+
+    ''' <summary>
+    ''' Reads the base variables from Enterprise EPDM syetm and maps them to Autocad Drawings TitleBlock Attribute names 
+    ''' </summary>
+    ''' <returns>A Hashmap, Keys are the Autocad Attribute Name, Values are valeus to be written to the attribute</returns>
+    ''' <remarks></remarks>
     Private Function MapPDMVariables() As Hashtable
         Try
             Dim ManagedXmlDocument As XPathDocument = New XPathDocument(ProjectInfoFile)
@@ -142,7 +349,9 @@ Public Class ManagedACEProject
             'Get the description
             Dim DrawingDescription As String = ""
             Dim xmlNodeItterator As XPathNodeIterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='Description']")
+
             If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
                 DrawingDescription = xmlNodeItterator.Current.GetAttribute("VALUE", "")
             End If
 
@@ -150,6 +359,7 @@ Public Class ManagedACEProject
             Dim DrawingRevision As String = ""
             xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='Revision']")
             If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
                 DrawingRevision = xmlNodeItterator.Current.GetAttribute("VALUE", "")
             End If
 
@@ -157,6 +367,7 @@ Public Class ManagedACEProject
             Dim DrawingDesigner As String = ""
             xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='Drawn By']")
             If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
                 DrawingDesigner = xmlNodeItterator.Current.GetAttribute("VALUE", "")
             End If
 
@@ -164,19 +375,136 @@ Public Class ManagedACEProject
             Dim DrawingDate As String = ""
             xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='DrawnDate']")
             If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
                 DrawingDate = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+                If DrawingDate.Length > 0 Then
+                    Dim DateParts As String() = DrawingDate.Split("/"c)
+                    If DateParts(2).Length > 2 Then
+                        DrawingDate = DateParts(0) & "/" & DateParts(1) & "/" & DateParts(2).Substring(2)
+                    End If
+                End If
             End If
+
+            'Get Drawing Number
+            Dim DrawingNumber As String = ""
+            xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='Number']")
+            If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
+                DrawingNumber = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+            End If
+
+            'Get Checked By Name
+            Dim CheckedByName As String = ""
+            xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='Checked By']")
+            If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
+                CheckedByName = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+            End If
+
+            'Get CheckedDate
+            Dim CheckedDate As String = ""
+            xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='Checked Date']")
+            If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
+                CheckedDate = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+            End If
+
+            'Get Issued By Name
+            Dim IssuedByName As String = ""
+            xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='IssuedBy']")
+            If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
+                IssuedByName = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+            End If
+
+            'Get Issued Date
+            Dim IssuedDate As String = ""
+            xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='IssuedDate']")
+            If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
+                IssuedDate = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+            End If
+
+            'Get Issue History 1 Number
+            Dim IssueHist1Number As String = ""
+            xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='IssueHistory1Number']")
+            If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
+                IssueHist1Number = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+            End If
+            'Get Issue History 1 Name
+            Dim IssueHist1Name As String = ""
+            xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='IssueHistory1Name']")
+            If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
+                IssueHist1Name = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+            End If
+            'Get Issue History 1 Description
+            Dim IssueHist1Desc As String = ""
+            xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='IssueHistory1Desc']")
+            If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
+                IssueHist1Desc = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+            End If
+            'Get Issue History 1 Date
+            Dim IssueHist1Date As String = ""
+            xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='IssueHistory1Date']")
+            If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
+                IssueHist1Number = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+            End If
+
+            'Get Issue History 2 Number
+            Dim IssueHist2Number As String = ""
+            xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='IssueHistory2Number']")
+            If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
+                IssueHist2Number = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+            End If
+            'Get Issue History 2 Name
+            Dim IssueHist2Name As String = ""
+            xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='IssueHistory2Name']")
+            If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
+                IssueHist2Name = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+            End If
+            'Get Issue History 2 Description
+            Dim IssueHist2Desc As String = ""
+            xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='IssueHistory2Desc']")
+            If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
+                IssueHist2Desc = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+            End If
+            'Get Issue History 1 Date
+            Dim IssueHist2Date As String = ""
+            xmlNodeItterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/VARIABLES/VARIABLE[@NAME='IssueHistory2Date']")
+            If xmlNodeItterator IsNot Nothing Then
+                xmlNodeItterator.MoveNext()
+                IssueHist2Number = xmlNodeItterator.Current.GetAttribute("VALUE", "")
+            End If
+
             xmlNodeItterator = Nothing
             xmlNavigator = Nothing
             ManagedXmlDocument = Nothing
 
             Dim AttributeMap As Hashtable = New Hashtable()
-            AttributeMap.Add("ISSUE NUMBER", DrawingRevision)
-            AttributeMap.Add("DRAWING NUMBER", ClassificationInfo.Name)
-            AttributeMap.Add("DRAWN DATE", DrawingDate)
-            AttributeMap.Add("DRAWN BY", DrawingDesigner)
-            AttributeMap.Add("DESCRIPTION 1", DrawingDescription)
-
+            AttributeMap.Add("ISSUE_NUM", DrawingRevision)
+            AttributeMap.Add("DRAWING_NO", DrawingNumber)
+            AttributeMap.Add("DRWN_DAT", DrawingDate)
+            AttributeMap.Add("DRWN_BY", DrawingDesigner)
+            AttributeMap.Add("DESCRIPTION_1", DrawingDescription)
+            AttributeMap.Add("CHECK_BY", CheckedByName)
+            AttributeMap.Add("CHECK_DAT", CheckedDate)
+            AttributeMap.Add("ISSUE_BY", IssuedByName)
+            AttributeMap.Add("ISS_DATE", IssuedDate)
+            AttributeMap.Add("IS1", IssueHist1Number)
+            AttributeMap.Add("IS_BY1", IssueHist1Name)
+            AttributeMap.Add("ISS_DESC_1", IssueHist1Desc)
+            AttributeMap.Add("IS_DATE_1", IssueHist2Date)
+            AttributeMap.Add("IS2", IssueHist2Number)
+            AttributeMap.Add("IS_BY2", IssueHist2Name)
+            AttributeMap.Add("ISS_DESC_2", IssueHist2Desc)
+            AttributeMap.Add("IS_DATE2", IssueHist2Date)
             Return AttributeMap
         Catch ex As Exception
             Throw New Exception("Failed Mapping PDM Variables", ex)
@@ -201,7 +529,9 @@ Public Class ManagedACEProject
             Dim DrawingList As TypedValue() = Nothing
             LispNth(resultArray, 4, DrawingList)
             For Each Drawing As TypedValue In DrawingList
-                DrawingsList.Add(Drawing.Value.ToString())
+                If IO.File.Exists(Drawing.Value.ToString().Replace("/", "\")) Then
+                    DrawingsList.Add(Drawing.Value.ToString().Replace("/", "\"))
+                End If
             Next
         Catch ex As Exception
             Throw New Exception("Failed Listing Project Drawings", ex)
@@ -215,7 +545,7 @@ Public Class ManagedACEProject
     ''' <param name="TypedValueList">A List of the paramters to perform the function on</param>
     ''' <param name="Number">the item number of the list</param>
     ''' <param name="Result">the nth element of the list</param>
-    ''' <remarks>Will not handle a list inside a list iniside a list</remarks>
+    ''' <remarks>Will not handle a list inside a list iniside a list without modification</remarks>
     Private Sub LispNth(ByVal TypedValueList As TypedValue(), ByVal Number As Integer, ByRef Result As TypedValue())
         Dim CurrentElement As Integer = 0
         Dim ResultList As List(Of TypedValue) = New List(Of TypedValue)
@@ -256,7 +586,7 @@ Public Class ManagedACEProject
     Private Function CreateACEProject() As Boolean
         Try
             'Get the path of tge template project
-            Dim TemplateProject As String = "C:\ProgramData\AutoCAD\AutoCAD2013\AeData\Proj\Ishida Default Project\Ishida Default Project.wdp" 'ItemGatewayDatabase.GetSetting("ManagedDocumentsFolder")
+            Dim TemplateProject As String = ItemGatewayDatabase.GetSetting("AceTemplateProject")
 
             If Not IO.File.Exists(TemplateProject) Then Return False 'Cannot Find Template Project
 
@@ -464,6 +794,45 @@ Public Class ManagedACEProject
             InfoFileWriter.WriteAttributeString("VALUE", "")
             InfoFileWriter.WriteEndElement() '</VARIABLE>'
 
+            InfoFileWriter.WriteStartElement("VARIABLE")
+            InfoFileWriter.WriteAttributeString("NAME", "IssueHistory1Number")
+            InfoFileWriter.WriteAttributeString("VALUE", "")
+            InfoFileWriter.WriteEndElement() '</VARIABLE>'
+
+            InfoFileWriter.WriteStartElement("VARIABLE")
+            InfoFileWriter.WriteAttributeString("NAME", "IssueHistory1Name")
+            InfoFileWriter.WriteAttributeString("VALUE", "")
+            InfoFileWriter.WriteEndElement() '</VARIABLE>'
+
+            InfoFileWriter.WriteStartElement("VARIABLE")
+            InfoFileWriter.WriteAttributeString("NAME", "IssueHistory1Desc")
+            InfoFileWriter.WriteAttributeString("VALUE", "")
+            InfoFileWriter.WriteEndElement() '</VARIABLE>'
+
+            InfoFileWriter.WriteStartElement("VARIABLE")
+            InfoFileWriter.WriteAttributeString("NAME", "IssueHistory1Date")
+            InfoFileWriter.WriteAttributeString("VALUE", "")
+            InfoFileWriter.WriteEndElement() '</VARIABLE>'
+
+            InfoFileWriter.WriteStartElement("VARIABLE")
+            InfoFileWriter.WriteAttributeString("NAME", "IssueHistory2Number")
+            InfoFileWriter.WriteAttributeString("VALUE", "")
+            InfoFileWriter.WriteEndElement() '</VARIABLE>'
+
+            InfoFileWriter.WriteStartElement("VARIABLE")
+            InfoFileWriter.WriteAttributeString("NAME", "IssueHistory2Name")
+            InfoFileWriter.WriteAttributeString("VALUE", "")
+            InfoFileWriter.WriteEndElement() '</VARIABLE>'
+
+            InfoFileWriter.WriteStartElement("VARIABLE")
+            InfoFileWriter.WriteAttributeString("NAME", "IssueHistory2Desc")
+            InfoFileWriter.WriteAttributeString("VALUE", "")
+            InfoFileWriter.WriteEndElement() '</VARIABLE>'
+
+            InfoFileWriter.WriteStartElement("VARIABLE")
+            InfoFileWriter.WriteAttributeString("NAME", "IssueHistory2Date")
+            InfoFileWriter.WriteAttributeString("VALUE", "")
+            InfoFileWriter.WriteEndElement() '</VARIABLE>'
             InfoFileWriter.WriteEndElement() '</VARIABLES>
 
             InfoFileWriter.WriteStartElement("BOM")
@@ -596,70 +965,101 @@ Public Class ManagedACEProject
     End Sub
 
 
-
+    ''' <summary>
+    ''' Updates the given attributes in all blocks on the activedrawing
+    ''' </summary>
+    ''' <param name="BlockName"></param>
+    ''' <param name="AttbMap"></param>
+    ''' <remarks></remarks>
     Private Sub UpdateAttribute(ByVal BlockName As String, ByVal AttbMap As Hashtable)
-        Dim db As Database = Application.DocumentManager.MdiActiveDocument.Database
-        UPdateAttributesInDatabase(db, BlockName, AttbMap)
-    End Sub
-    
-    Private Sub UPdateAttributesInDatabase(ByVal db As Database, ByVal BlockName As String, ByVal AttbMap As Hashtable)
-        Dim msID As ObjectId = Nothing
-        Dim psID As ObjectId = Nothing
-
-        Dim tr As Transaction = db.TransactionManager.StartTransaction()
-        Using tr
-            Dim bt As BlockTable = CType(tr.GetObject(db.BlockTableId, OpenMode.ForRead), BlockTable)
-            msID = bt(BlockTableRecord.ModelSpace)
-            psID = bt(BlockTableRecord.PaperSpace)
-            tr.Commit()
-        End Using
-
-        Dim msCount As Integer = UpdateAttributesInBlock(msID, AttbMap, BlockName)
-        Dim psCount As Integer = UpdateAttributesInBlock(psID, AttbMap, BlockName)
+        Try
+            Dim db As Database = Application.DocumentManager.MdiActiveDocument.Database
+            UpdateAttributesInDatabase(db, BlockName, AttbMap)
+        Catch ex As Exception
+            Throw New Exception("Error Updating Attributes")
+        End Try
     End Sub
 
-    Private Function UpdateAttributesInBlock(ByVal btrId As ObjectId, ByVal attbMap As Hashtable, ByVal blockName As String) As Integer
-        Dim changedCount As Integer = 0
-        Dim doc As Document = Application.DocumentManager.MdiActiveDocument
-        Dim db As Database = doc.Database
+    ''' <summary>
+    ''' Updates The given attributes of every block in an autocad Drawings Database
+    ''' </summary>
+    ''' <param name="db"></param>
+    ''' <param name="BlockName"></param>
+    ''' <param name="AttbMap"></param>
+    ''' <remarks></remarks>
+    Private Sub UpdateAttributesInDatabase(ByVal db As Database, ByVal BlockName As String, ByVal AttbMap As Hashtable)
+        Try
 
-        Dim tr As Transaction = doc.TransactionManager.StartTransaction()
-        Using tr
-            Dim btr As BlockTableRecord = CType(tr.GetObject(btrId, OpenMode.ForRead), BlockTableRecord)
+            Dim msID As ObjectId = Nothing
+            Dim psID As ObjectId = Nothing
 
-            For Each entId As ObjectId In btr
-                Dim ent As Entity = TryCast(tr.GetObject(entId, OpenMode.ForRead), Entity)
-                If ent IsNot Nothing Then
-                    Dim br As BlockReference = TryCast(ent, BlockReference)
-                    If br IsNot Nothing Then
-                        Dim bd As BlockTableRecord = CType(tr.GetObject(br.BlockTableRecord, OpenMode.ForRead), BlockTableRecord)
-                        'Check ownerID for layout info
-                        If String.Compare(bd.Name, blockName, True) = 0 Then
-                            For Each arId As ObjectId In br.AttributeCollection
-                                Dim obj As DBObject = tr.GetObject(arId, OpenMode.ForRead)
-                                Dim ar As AttributeReference = TryCast(obj, AttributeReference)
-                                If ar IsNot Nothing Then
-                                    For Each attbName As String In attbMap.Keys
-                                        If String.Compare(ar.Tag, attbName, True) = 0 Then
-                                            ar.UpgradeOpen()
-                                            ar.TextString = attbMap(attbName).ToString()
-                                            Dim wdb As Database = HostApplicationServices.WorkingDatabase
-                                            HostApplicationServices.WorkingDatabase = db
-                                            ar.AdjustAlignment(db)
-                                            HostApplicationServices.WorkingDatabase = wdb
-                                            ar.DowngradeOpen()
-                                            changedCount += 1
-                                        End If
-                                    Next
-                                End If
-                            Next
+            Dim tr As Transaction = db.TransactionManager.StartTransaction()
+            Using tr
+                Dim bt As BlockTable = CType(tr.GetObject(db.BlockTableId, OpenMode.ForRead), BlockTable)
+                msID = bt(BlockTableRecord.ModelSpace)
+                psID = bt(BlockTableRecord.PaperSpace)
+                tr.Commit()
+            End Using
+
+            Dim msCount As Integer = UpdateAttributesInBlock(db, msID, AttbMap, BlockName)
+            Dim psCount As Integer = UpdateAttributesInBlock(db, psID, AttbMap, BlockName)
+        Catch ex As Exception
+            Throw New Exception("Error Updating Attributes In Database")
+        End Try
+    End Sub
+
+    ''' <summary>
+    ''' Updates a list of attributes in a block
+    ''' </summary>
+    ''' <param name="btrId">The Plock Table record for either paperspace of model space</param>
+    ''' <param name="attbMap">A Map of attributes and Values</param>
+    ''' <param name="blockName">The name of the block</param>
+    ''' <returns></returns>
+    ''' <remarks></remarks>
+    Private Function UpdateAttributesInBlock(ByVal db As Database, ByVal btrId As ObjectId, ByVal attbMap As Hashtable, ByVal blockName As String) As Integer
+        Try
+            Dim changedCount As Integer = 0
+
+            Dim tr As Transaction = db.TransactionManager.StartTransaction()
+            Using tr
+                Dim btr As BlockTableRecord = CType(tr.GetObject(btrId, OpenMode.ForRead), BlockTableRecord)
+
+                For Each entId As ObjectId In btr
+                    Dim ent As Entity = TryCast(tr.GetObject(entId, OpenMode.ForRead), Entity)
+                    If ent IsNot Nothing Then
+                        Dim br As BlockReference = TryCast(ent, BlockReference)
+                        If br IsNot Nothing Then
+                            Dim bd As BlockTableRecord = CType(tr.GetObject(br.BlockTableRecord, OpenMode.ForRead), BlockTableRecord)
+                            'Check ownerID for layout info
+                            If String.Compare(bd.Name, blockName, True) = 0 Then
+                                For Each arId As ObjectId In br.AttributeCollection
+                                    Dim obj As DBObject = tr.GetObject(arId, OpenMode.ForRead)
+                                    Dim ar As AttributeReference = TryCast(obj, AttributeReference)
+                                    If ar IsNot Nothing Then
+                                        For Each attbName As String In attbMap.Keys
+                                            If String.Compare(ar.Tag, attbName, True) = 0 Then
+                                                ar.UpgradeOpen()
+                                                ar.TextString = attbMap(attbName).ToString()
+                                                Dim wdb As Database = HostApplicationServices.WorkingDatabase
+                                                HostApplicationServices.WorkingDatabase = db
+                                                ar.AdjustAlignment(db)
+                                                HostApplicationServices.WorkingDatabase = wdb
+                                                ar.DowngradeOpen()
+                                                changedCount += 1
+                                            End If
+                                        Next
+                                    End If
+                                Next
+                            End If
+                            changedCount += UpdateAttributesInBlock(db, br.BlockTableRecord, attbMap, blockName)
                         End If
-                        changedCount += UpdateAttributesInBlock(br.BlockTableRecord, attbMap, blockName)
                     End If
-                End If
-            Next
-            tr.Commit()
-        End Using
-        Return changedCount
+                Next
+                tr.Commit()
+            End Using
+            Return changedCount
+        Catch ex As Exception
+            Throw New Exception("Error Updating Attributes In Block")
+        End Try
     End Function
 End Class
