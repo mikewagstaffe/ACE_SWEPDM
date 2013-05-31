@@ -127,6 +127,11 @@ Public Class ManagedACEProject
                 UpdateTitlePages(True, True, False)
             End If
 
+            'Ensure that the files have been checked in once
+            FirstCheckInACEProjectFiles()
+
+
+
         Catch ex As Exception
             Throw New Exception("Failed Creating New Project", ex)
         End Try
@@ -139,33 +144,48 @@ Public Class ManagedACEProject
     ''' </summary>
     ''' <remarks></remarks>
     Private Sub FirstCheckInACEProjectFiles()
-        Dim EpdmConn As EPDMConnection = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection)
-        If EpdmConn IsNot Nothing Then
-            Dim FileIDs As List(Of Integer) = New List(Of Integer)
-            For Each ProjectDrawing As String In DrawingsList
-                Dim FileID As Integer = EpdmConn.FetchDocumentID(ProjectDrawing)
-                If FileID > 0 Then
-                    FileIDs.Add(FileID)
-                End If
-            Next
-            'Wdp file
-            Dim WdpFileID As Integer = EpdmConn.FetchDocumentID(FullProjectName)
-            If WdpFileID > -1 Then
-                FileIDs.Add(WdpFileID)
-            End If
-            'Directory Listingn for other project files
-
-            Dim di As New IO.DirectoryInfo(IO.Path.GetDirectoryName(FullProjectName))
-            For Each ListedFile As IO.FileInfo In di.GetFiles()
-                If String.Compare(ListedFile.Extension, ".dsd", True) = 0 Or String.Compare(ListedFile.Extension, ".loc", True) = 0 Or String.Compare(ListedFile.Extension, ".inst", True) = 0 Or String.Compare(ListedFile.Extension, ".wdl", True) = 0 Then
-                    Dim FileID As Integer = EpdmConn.FetchDocumentID(ListedFile.FullName)
-                    If FileID > -1 Then
+        Try
+            Dim EpdmConn As EPDMConnection = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection)
+            If EpdmConn IsNot Nothing Then
+                Dim FileIDs As List(Of Integer) = New List(Of Integer)
+                For Each ProjectDrawing As String In DrawingsList
+                    Dim FileID As Integer = EpdmConn.FetchDocumentID(ProjectDrawing)
+                    If FileID > 0 Then
                         FileIDs.Add(FileID)
                     End If
+                Next
+                'Wdp file
+                Dim WdpFileID As Integer = EpdmConn.FetchDocumentID(FullProjectName)
+                If WdpFileID > -1 Then
+                    FileIDs.Add(WdpFileID)
                 End If
-            Next
-            EpdmConn.CheckInFiles(FileIDs, False)
-        End If
+                'Directory Listing for other project files
+
+                Dim di As New IO.DirectoryInfo(IO.Path.GetDirectoryName(FullProjectName))
+                For Each ListedFile As IO.FileInfo In di.GetFiles()
+                    If String.Compare(ListedFile.Extension, ".dsd", True) = 0 Or String.Compare(ListedFile.Extension, ".loc", True) = 0 Or String.Compare(ListedFile.Extension, ".inst", True) = 0 Or String.Compare(ListedFile.Extension, ".wdl", True) = 0 Then
+                        Dim FileID As Integer = EpdmConn.FetchDocumentID(ListedFile.FullName)
+                        If FileID > -1 Then
+                            FileIDs.Add(FileID)
+                        End If
+                    End If
+                Next
+                'Check In the files
+                EpdmConn.CheckInFiles(FileIDs, False)
+
+                'following this need to check that all files are in the correct state if not transition to wip using the no set revision transistion
+                For Each FileID As Integer In FileIDs
+                    Dim CurrentState As String = ""
+                    CurrentState = EpdmConn.QueryFileState(FileID)
+                    If CurrentState Is Nothing Then Continue For
+                    If String.Compare(CurrentState, "WIP") = 0 Then Continue For 'File is already in wip
+                    EpdmConn.MoveFileToState(FileID, "WIP")
+                Next
+            End If
+
+        Catch ex As Exception
+            Throw New Exception("Failed Checking In New Project Files")
+        End Try
     End Sub
 
     ''' <summary>
@@ -179,13 +199,20 @@ Public Class ManagedACEProject
                 Dim FileID As Integer = EpdmConn.FetchDocumentID(ProjectDrawing)
                 If FileID = -1 Then
                     'Not added So add it
-                    EpdmConn.AddFileToVault(ProjectDrawing, IO.Path.GetDirectoryName(ProjectDrawing), "")
+                    Try
+                        EpdmConn.AddFileToVault(ProjectDrawing, IO.Path.GetDirectoryName(ProjectDrawing), "")
+                    Catch
+                    End Try
                 End If
+
             Next
             'Test Wdp file
             Dim WdpFileID As Integer = EpdmConn.FetchDocumentID(FullProjectName)
             If WdpFileID = -1 Then
-                EpdmConn.AddFileToVault(FullProjectName, IO.Path.GetDirectoryName(FullProjectName), "")
+                Try
+                    EpdmConn.AddFileToVault(FullProjectName, IO.Path.GetDirectoryName(FullProjectName), "")
+                Catch
+                End Try
             End If
             'Directory Listing
 
@@ -195,8 +222,12 @@ Public Class ManagedACEProject
                     Dim FileID As Integer = EpdmConn.FetchDocumentID(ListedFile.FullName)
                     If FileID = -1 Then
                         'Not added So add it
-                        EpdmConn.AddFileToVault(ListedFile.FullName, IO.Path.GetDirectoryName(FullProjectName), "")
+                        Try
+                            EpdmConn.AddFileToVault(ListedFile.FullName, IO.Path.GetDirectoryName(FullProjectName), "")
+                        Catch
+                        End Try
                     End If
+
                 End If
             Next
         End If

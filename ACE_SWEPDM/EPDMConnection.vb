@@ -611,6 +611,25 @@ Public Class EPDMConnection
         End Try
     End Sub
 
+
+    ''' <summary>
+    ''' Returns The Current State of A File
+    ''' </summary>
+    ''' <param name="FileID"></param>
+    ''' <returns> The name of the current State</returns>
+    ''' <remarks></remarks>
+    Public Function QueryFileState(ByVal FileID As Integer) As String
+        Try
+            Dim edmFile As IEdmFile8 = DirectCast(edmVault.GetObject(EdmObjectType.EdmObject_File, FileID), IEdmFile8)
+            If edmFile Is Nothing Then Throw New Exception("Failed To Get File Interface")
+            Dim State As String = edmFile.CurrentState.Name.ToString()
+            edmFile = Nothing
+            Return State
+        Catch ex As Exception
+            Throw New Exception("Failed changing state", ex)
+        End Try
+    End Function
+
     ''' <summary>
     ''' Move file to next state
     ''' </summary>
@@ -622,6 +641,7 @@ Public Class EPDMConnection
             Dim edmFile As IEdmFile8 = DirectCast(edmVault.GetObject(EdmObjectType.EdmObject_File, FileID), IEdmFile8)
             Dim edmFileFolderID As Integer = edmFile.GetNextFolder(edmFile.GetFirstFolderPosition()).ID
             edmFile.ChangeState(DirectCast(StateName, Object), edmFileFolderID, "Initialization", 0, EdmStateFlags.EdmState_Simple)
+
         Catch ex As Exception
             Throw New Exception("Failed changing state", ex)
         End Try
