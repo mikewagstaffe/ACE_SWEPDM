@@ -631,6 +631,49 @@ Public Class EPDMConnection
     End Function
 
     ''' <summary>
+    ''' Returns A List of Transition ID's  That can be Executed From The Files Current State, For the current logged in user
+    ''' </summary>
+    ''' <param name="FileID">ID of the File To Check</param>
+    ''' <returns></returns>
+    ''' <remarks></remarks>
+    Public Function ListAvailableFileTransitions(ByVal FileID As Integer) As List(Of Integer)
+        Try
+            Dim edmFile As IEdmFile8 = DirectCast(edmVault.GetObject(EdmObjectType.EdmObject_File, FileID), IEdmFile8)
+            If edmFile Is Nothing Then Throw New Exception("Failed To Get File Interface")
+            Dim edmState As IEdmState7 = DirectCast(edmFile.CurrentState, IEdmState7)
+            Dim edmPos As IEdmPos5 = edmState.GetFirstTransitionPosition(True)
+            Dim TransitionIDs As List(Of Integer) = New List(Of Integer)
+            While Not edmPos.IsNull
+                Dim edmTransition As IEdmTransition9 = DirectCast(edmState.GetNextTransition(edmPos), IEdmTransition9)
+                If edmTransition IsNot Nothing Then
+                    If edmTransition.CheckPermission() Then TransitionIDs.Add(edmTransition.ID)
+                    edmTransition = Nothing
+                End If
+            End While
+            edmFile = Nothing
+            Return TransitionIDs
+        Catch ex As Exception
+            Throw New Exception("Failed Finding Available Transitions", ex)
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' Gets The Name For a given Transition ID, returns Nothing if the ID was not found
+    ''' </summary>
+    ''' <param name="TransitionID">Transition ID</param>
+    ''' <returns>ame of the Transition, or Nothing</returns>
+    ''' <remarks></remarks>
+    Public Function GetTransitionName(ByVal TransitionID As Integer) As String
+        Try
+            Dim edmTransition As IEdmTransition9 = TryCast(edmVault.GetObject(EdmObjectType.EdmObject_Transition, TransitionID), IEdmTransition9)
+            If edmTransition Is Nothing Then Return Nothing ' Tranistion Does Not Exist
+            Return edmTransition.Name
+        Catch ex As Exception
+            Throw New Exception("Failed Finding Transition Name", ex)
+        End Try
+    End Function
+
+    ''' <summary>
     ''' Move file to next state
     ''' </summary>
     ''' <param name="FileID"></param>
@@ -879,6 +922,59 @@ Public Class EPDMConnection
             edmBatchGet.GetFiles(0)
             Dim test As EdmSelectionList5 = edmBatchGet.GetFileList(EdmGetFileListFlag.Egflf_GetFailed)
             edmFile = Nothing
+            edmBatchGet = Nothing
+        Catch ex As Exception
+            Throw New Exception("Failed Getting Local Version", ex)
+        End Try
+    End Sub
+
+    ''' <summary>
+    ''' Gets The EPDM Folder ID of a given file Path, path can be that of a file or a folder
+    ''' </summary>
+    ''' <param name="FilePath">The Path of</param>
+    ''' <param name="IsFilePath">The Path passed in is a file path, if false, treated as a folder path. Default is file path</param>
+    ''' <returns>The ID of the File paths folder or -1 if not found</returns>
+    ''' <remarks></remarks>
+    Public Function GetFolderID(ByVal FilePath As String, Optional ByVal IsFilePath As Boolean = True) As Integer
+        Try
+            Dim FolderID As Integer = -1
+            If IsFilePath Then 'Path given is to a file
+                Dim edmFolder As IEdmFolder7
+                Dim edmFile As IEdmFile8 = TryCast(edmVault.GetFileFromPath(FilePath, TryCast(edmFolder, IEdmFolder7)), IEdmFile8)
+                If edmFile Is Nothing Or edmFolder Is Nothing Then Return -1 'the fileath was not valid
+                FolderID = edmFolder.ID
+                edmFolder = Nothing
+                edmFile = Nothing
+            Else 'Path given is to a folder
+                Dim edmFolder As IEdmFolder7 = TryCast(edmVault.GetFolderFromPath(FilePath), IEdmFolder7)
+                If edmFolder Is Nothing Then Return -1 'the fileath was not valid
+                FolderID = edmFolder.ID
+                edmFolder = Nothing
+            End If
+            Return FolderID
+        Catch ex As Exception
+            Throw New Exception("Failed Getting Folder ID", ex)
+        End Try
+    End Function
+
+
+    ''' <summary>
+    ''' Gets A local Copy of all the files in a folder at Latest Version of the given folder
+    ''' </summary>
+    ''' <param name="FolderID">ID of the File</param>
+    ''' <remarks></remarks>
+    Public Sub FetchFolderLatest(ByVal FolderID As Integer)
+        Try
+            Dim edmFolder As IEdmFolder7 = TryCast(edmVault.GetObject(EdmObjectType.EdmObject_File, FolderID), IEdmFolder7)
+            If edmFolder Is Nothing Then Throw New Exception("Invalid Folder ID")
+            edmFolder = Nothing
+            Dim edmBatchGet As IEdmBatchGet = DirectCast(edmVault.CreateUtility(EdmUtility.EdmUtil_BatchGet), IEdmBatchGet)
+            Dim edmSelAr(1) As EdmSelItem
+            edmSelAr(0).mlDocID = 0
+            edmSelAr(0).mlProjID = FolderID
+            edmBatchGet.AddSelection(DirectCast(edmVault, EdmVault5), DirectCast(edmSelAr, Array))
+            edmBatchGet.CreateTree(0, EdmGetCmdFlags.Egcf_Nothing)
+            edmBatchGet.GetFiles(0)
             edmBatchGet = Nothing
         Catch ex As Exception
             Throw New Exception("Failed Getting Local Version", ex)

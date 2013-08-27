@@ -4,6 +4,36 @@ Imports System.ServiceModel
 Public Class OntologyStudioConnection
 
     ''' <summary>
+    ''' Looks Up a part in Ontlogy Studio and Returns Details About It. Allows Selection of User Interaction or not
+    ''' </summary>
+    ''' <param name="UniqueID">Ignored If UserInteract is true, otherwise provides the Unique ID to Lookup</param>
+    ''' <param name="UserInteract">Lookup the part given by UniqueID or let user select a part if true</param>
+    ''' <returns>Information about a part in Ontology Studio, the part given by UniqueID if UserInteract Is False
+    ''' otherwise, a part selected by the user</returns>
+    ''' <remarks></remarks>
+    Public Function LookupExistingItem(ByVal UniqueID As String, Optional ByVal UserInteract As Boolean = False) As OntologyStudioData
+        Try
+            Dim OsInfo As OntologyStudioInfo = New OntologyStudioInfo()
+            If Not UserInteract And UniqueID IsNot Nothing Then
+                Dim OsItemInfo As OntologyStudioInfo = New OntologyStudioInfo()
+                OsItemInfo.Item = UniqueID
+                OsInfo = SendCommandToOntologyStudio(OsItemInfo, ItemMode.ModeSilent)
+            ElseIf UserInteract Then
+                OsInfo = SendCommandToOntologyStudio(New OntologyStudioInfo(), ItemMode.ModeLookup)
+            End If
+            Dim ClasificationInfo As OntologyStudioData = New OntologyStudioData()
+            If OsInfo IsNot Nothing Then
+                ClasificationInfo.Name = OsInfo.Item
+                ClasificationInfo.RelativePath = OsInfo.sDataString2
+                ClasificationInfo.Description = OsInfo.sDataString1
+            End If
+            Return ClasificationInfo
+        Catch ex As Exception
+            Throw ex
+        End Try
+    End Function
+
+    ''' <summary>
     ''' Creates A New Item in Ontology Studio
     ''' </summary>
     ''' <returns>Ontology Studio Info Detailing The Clasification of the item</returns>

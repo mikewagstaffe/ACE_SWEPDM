@@ -10,41 +10,315 @@ Imports System.Xml.XPath
 
 Public Class ManagedACEProject
 
-    Private Const csClasificationImage As String = "AcadProjectImg.png"
-    Private Const csTitleBlockName As String = "ISHDA STANDARD BORDER"
-    Private Const csTitlePageBlockName As String = "TITLEBLOCK"
-    Private Const csInfoBlockName As String = "INFOBLOCK"
+    Private Const csClasificationImage As String = "AcadProjectImg.png" 'The Name of the Standard Image Sent When Classifying The Project
+    Private Const csTitleBlockName As String = "ISHDA STANDARD BORDER"  'The Name of The Title Block AutoCAD Block on Project Drawings
+    Private Const csTitlePageBlockName As String = "TITLEBLOCK"         'The Name Of The Title Page Block on the First Page of a Project
+    Private Const csInfoBlockName As String = "INFOBLOCK"               'The Name of the Info Page Block on the second Page of a Project
+    Private Const csTransitionNameToWIP As String = "NO SET REVISION"   'The Name of the EPDM Transition to use to transition Files To WIP, used in the bug fix on first check in
 
-    Private ClassificationInfo As OntologyStudioData = Nothing
-    Private ConnectionMgr As ConnectionManager = Nothing
-    Private EPDMItemID As Integer = -1
-    Private EPDMFileID As Integer = -1
-    Private ProjectInfoFile As String = Nothing
-    Private PartNumberPattern As String = "*"
-    Private ProjectTitle As String = ""
-    Private ProjectFolder As String = ""
-    Private CurrentOperationProgress As Integer = 0
-    Private ProjectExists As Boolean = False
-    Private DrawingsList As List(Of String) = Nothing
-    Private FullProjectName As String = ""
+    Private ClassificationInfo As OntologyStudioData = Nothing          'Member Variable To Hold Classification Info For Ontology Studio
+    Private ConnectionMgr As ConnectionManager = Nothing                'Member Variable To hold A connection Manager to Interface With EPDM
+    Private EPDMItemID As Integer = -1                                  'Member Variable To Hold The EPDM ID of the Item associated with this Project
+    Private EPDMFileID As Integer = -1                                  'Member Variable To Hold The EPDM ID of the Project Information file associated with this Project
+    Private ProjectInfoFile As String = Nothing                         'Member Variable To Hold The File name of the Project Information file associated with this Project
+    Private PartNumberPattern As String = "*"                           'Member Variable For the Part Number Pattern used when classifying the project
+    Private ProjectTitle As String = ""                                 'Member Varibale For The User Defined Name For The Project ( name of the WDP File)
+    Private ProjectFolder As String = ""                                'Member Variable For The Projects Full Path, (The full folder structure to the WDP File) 
+    Private ProjectExists As Boolean = False                            'Member Variable Set To True, if the project represented by this object actually exists, set on succesful creation
+    Private DrawingsList As List(Of String) = Nothing                   'Member Variable To Hold a List of drawings that form a part of this project
+    Private FullProjectName As String = ""                              'Member Variable To Hold the Full path, including file name to the Project WDP file
+
     ''' <summary>
     ''' Creates A new Manaegd ACE Project Object
     ''' </summary>
     ''' <param name="bCreate">if True A new project is created in the Managed system, else 
     ''' The Object can be used to represent an exiting Project </param>
     ''' <remarks></remarks>
-    Public Sub New(ByRef ConnectionMgr As ConnectionManager, Optional ByVal bCreate As Boolean = False)
+    Public Sub New(ByRef ConnectionMgr As ConnectionManager, Optional ByVal bCreate As Boolean = False, Optional ByVal sCopyOf As String = Nothing)
         Me.ConnectionMgr = ConnectionMgr
         If bCreate Then
-            CreateNewProject()
+            If sCopyOf Is Nothing Then
+                CreateNewProject()
+            Else
+                If IO.File.Exists(sCopyOf) Then
+                    CreateNewProject(sCopyOf)
+                Else
+                    Throw New Exception("A Project To Copy was Specified that does not exist")
+                End If
+            End If
+
         End If
     End Sub
+
+
+    ''' <summary>
+    ''' Resets This Object Back To a default uninitialised ACE Project
+    ''' </summary>
+    ''' <remarks></remarks>
+    Private Sub ResetObject()
+        ClassificationInfo = Nothing         'Member Variable To Hold Classification Info For Ontology Studio
+        EPDMItemID = -1                      'Member Variable To Hold The EPDM ID of the Item associated with this Project
+        EPDMFileID = -1                      'Member Variable To Hold The EPDM ID of the Project Information file associated with this Project
+        ProjectInfoFile = Nothing            'Member Variable To Hold The File name of the Project Information file associated with this Project
+        PartNumberPattern = "*"              'Member Variable For the Part Number Pattern used when classifying the project
+        ProjectTitle = ""                    'Member Varibale For The User Defined Name For The Project ( name of the WDP File)
+        ProjectFolder = ""                   'Member Variable For The Projects Full Path, (The full folder structure to the WDP File) 
+        ProjectExists = False                'Member Variable Set To True, if the project represented by this object actually exists, set on succesful creation
+        DrawingsList = Nothing               'Member Variable To Hold a List of drawings that form a part of this project
+        FullProjectName = ""                 'Member Variable To Hold the Full path, including file name to the Project WDP file
+    End Sub
+
+    ''' <summary>
+    ''' Sets This Project To Point To The Current Active AutoCAD Project
+    ''' </summary>
+    ''' <returns>True If Completed Succesfully</returns>
+    ''' <remarks>Sets the FullProjectName if the active project could be determined, All other member variables are cleared</remarks>
+    Public Function SetACEActiveProject() As Boolean
+        Try
+            ResetObject() 'Clear All Member Variables
+
+            Dim rb As ResultBuffer = New ResultBuffer()
+            rb.Add(New TypedValue(Autodesk.AutoCAD.Runtime.LispDataType.Text, "ace_getactiveproject"))
+            Dim Res_rb As ResultBuffer = Application.Invoke(rb)
+            If Res_rb Is Nothing Then
+                Return False ' Could Not Get The Active Project
+            End If
+
+            For Each Val As TypedValue In Res_rb
+                'there should only be 1 return value
+                If Not Val.TypeCode = Autodesk.AutoCAD.Runtime.LispDataType.Text Then Continue For
+                FullProjectName = Val.Value.ToString()
+                If FullProjectName Is Nothing Then Continue For
+                If FullProjectName.Length > 0 Then Exit For
+            Next
+            FullProjectName.Replace("/", "\") 'Make sure FullProjectName Is A Correct Path
+
+            'Now Check If the wdp file is in the vault
+            EPDMFileID = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).FetchDocumentID(FullProjectName)
+            If EPDMFileID < 0 Then
+                ResetObject() 'The active Project is not managed, not allowed to copy a non managed project
+                Return False
+            End If
+
+            'The project is in the vault, 
+            Dim FolderID As Integer = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).GetFolderID(FullProjectName, True)
+            If FolderID < 0 Then
+                ResetObject() 'The active Project is not managed, not allowed to copy a non managed project
+                Return False
+            End If
+
+            DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).FetchFolderLatest(FolderID)
+
+
+            'Now Have the latest version of all files in the folder, list all the drawings in the project
+            ListDrawings()
+
+            ProjectFolder = IO.Path.GetDirectoryName(FullProjectName)
+            Dim PreProjectPath As String = IO.Path.GetDirectoryName(ProjectFolder) & "\"
+
+            Dim ProjectID As String = ProjectFolder.Replace(PreProjectPath, "")
+            If ProjectID.Length <= 0 Then
+                ResetObject() 'Could not find a valid project ID
+                Return False
+            End If
+
+            'Get ClasificationData
+            ClassificationInfo = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.OntologyStudio), OntologyStudioConnection).LookupExistingItem(ProjectID)
+            If ClassificationInfo Is Nothing Then
+                ResetObject() 'Part did not exist in Ontology Studio
+                Return False
+            End If
+
+            If ClassificationInfo.Name Is Nothing Then
+                ResetObject() 'Part did not exist in Ontology Studio
+                Return False
+            End If
+
+            If ClassificationInfo.Name.Length <= 0 Then
+                ResetObject() 'Part did not exist in Ontology Studio
+                Return False
+            End If
+
+            EPDMItemID = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).FindItem(ProjectID)
+            If EPDMItemID < 0 Then
+                ResetObject() 'Could Not Find an Enterprise PDM Item
+                Return False
+            End If
+
+            ProjectTitle = IO.Path.GetFileNameWithoutExtension(FullProjectName) 'Get The Project Title
+
+            'ProjectInfoFile
+            ProjectInfoFile = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).VaultRootFolder
+            If Not ProjectInfoFile.EndsWith("\") Then ProjectInfoFile &= "\"
+            ProjectInfoFile &= ConnectionMgr.EPDM_ConnectionInfo.ManagedDocumentsFolder
+            If Not ClassificationInfo.RelativePath.StartsWith("\") Then ProjectInfoFile &= "\"
+            ProjectInfoFile &= ClassificationInfo.RelativePath
+            ProjectInfoFile &= ClassificationInfo.Name
+            ProjectInfoFile &= ".xml"
+
+            EPDMFileID = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).FetchDocumentID(ProjectInfoFile)
+            If EPDMFileID <= 0 Then
+                ResetObject() 'The Correct Project Information File Is Not In the Vault
+                Return False
+            End If
+
+            ProjectExists = True
+            'This object is now set to the Current Active AutoCAD Project
+            Return True
+        Catch ex As System.Exception
+            Throw ex
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' Sets This Project To Point To A User Selected Project From Ontology Studio
+    ''' </summary>
+    ''' <returns></returns>
+    ''' <remarks></remarks>
+    Public Function SetProject() As Boolean
+        Try
+            ResetObject() 'Clear All Member Variables
+
+            'Get ClasificationData
+            ClassificationInfo = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.OntologyStudio), OntologyStudioConnection).LookupExistingItem("", True)
+            If ClassificationInfo Is Nothing Then
+                ResetObject() 'Part did not exist in Ontology Studio
+                Return False
+            End If
+
+            If ClassificationInfo.Name Is Nothing Then
+                ResetObject() 'Part did not exist in Ontology Studio
+                Return False
+            End If
+
+            If ClassificationInfo.Name.Length <= 0 Then
+                ResetObject() 'Part did not exist in Ontology Studio
+                Return False
+            End If
+
+            EPDMItemID = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).FindItem(ClassificationInfo.Name)
+            If EPDMItemID < 0 Then
+                ResetObject() 'Could Not Find an Enterprise PDM Item
+                Return False
+            End If
+
+            'ProjectInfoFile
+            ProjectInfoFile = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).VaultRootFolder
+            If Not ProjectInfoFile.EndsWith("\") Then ProjectInfoFile &= "\"
+            ProjectInfoFile &= ConnectionMgr.EPDM_ConnectionInfo.ManagedDocumentsFolder
+            If Not ClassificationInfo.RelativePath.StartsWith("\") Then ProjectInfoFile &= "\"
+            ProjectInfoFile &= ClassificationInfo.RelativePath
+            ProjectInfoFile &= ClassificationInfo.Name
+            ProjectInfoFile &= ".xml"
+
+            EPDMFileID = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).FetchDocumentID(ProjectInfoFile)
+            If EPDMFileID <= 0 Then
+                ResetObject() 'The Correct Project Information File Is Not In the Vault
+                Return False
+            End If
+
+            ProjectFolder = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).VaultRootFolder
+            If Not ProjectFolder.EndsWith("\") And Not ConnectionMgr.EPDM_ConnectionInfo.ManagedDocumentsFolder.StartsWith("\") Then ProjectFolder &= "\"
+            ProjectFolder &= ConnectionMgr.EPDM_ConnectionInfo.ManagedDocumentsFolder
+            If Not ProjectFolder.EndsWith("\") And Not ClassificationInfo.RelativePath.StartsWith("\") Then ProjectFolder &= "\"
+            ProjectFolder &= ClassificationInfo.RelativePath
+            If Not ProjectFolder.EndsWith("\") Then ProjectFolder &= "\"
+            ProjectFolder &= ClassificationInfo.Name
+
+            Dim FolderID As Integer = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).GetFolderID(FullProjectName, True)
+            If FolderID < 0 Then
+                ResetObject() 'The selected Project is not managed, not allowed to copy a non managed project
+                Return False
+            End If
+
+            DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).FetchFolderLatest(FolderID)
+
+            'Now Have the latest version of all files in the folder, list all the drawings in the project
+            ListDrawings()
+
+            'read Information from the Project Information File
+            ReadProjectTitle()
+            If ProjectTitle Is Nothing Then Return False
+            If ProjectTitle.Length <= 0 Then Return False
+
+            ProjectExists = True
+            'This object is now been set to the selected Project
+            Return True
+        Catch ex As System.Exception
+            Throw ex
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' Makes A New Project As an Exact Copy of this project
+    ''' </summary>
+    ''' <returns></returns>
+    ''' <remarks></remarks>
+    Public Function MakeCopyProject(ByRef CopyOfProject As ManagedACEProject) As Integer
+        Try
+            If Not ProjectExists Then Return -1 'Source Project Invalid
+
+            'Check If any drawings in this project are open fail if they are
+            If IsProjectDrawingOpen(True) Then Return -2 'cannot close open drawings
+
+            'Create a new project using this one as the source
+            CopyOfProject = New ManagedACEProject(ConnectionMgr, True, FullProjectName)
+            If CopyOfProject Is Nothing Then Return -3 'something went wrong could not copy project
+
+            Return 0
+        Catch ex As Exception
+            Throw ex
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' Checks All open Drawings against those listed in the project, if specified open drawings are closed
+    ''' </summary>
+    ''' <param name="CloseOpen">Close Open Project drawings, changes are saved</param>
+    ''' <returns>False if No Drawings are Open</returns>
+    ''' <remarks></remarks>
+    Public Function IsProjectDrawingOpen(Optional ByVal CloseOpen As Boolean = False) As Boolean
+        Try
+            Dim ThisDoc As Document = Application.DocumentManager.MdiActiveDocument
+            If DrawingsList Is Nothing Then Throw New Exception("Drawing List Not Initialised")
+            For Each openDoc As Document In Application.DocumentManager
+                If String.Compare(IO.Path.GetExtension(openDoc.Database.Filename), ".DWG", True) <> 0 Then Continue For 'not a file in this project
+                For Each ProjectDwg As String In DrawingsList
+                    If String.Compare(ProjectDwg, openDoc.Database.Filename, True) = 0 Then
+                        If CloseOpen Then
+                            If openDoc = ThisDoc Then
+                                Return True ' This command is executing on this document cannot close
+                            End If
+
+                            If openDoc.IsReadOnly Then
+                                Autodesk.AutoCAD.ApplicationServices.DocumentExtension.CloseAndDiscard(openDoc)
+                            Else
+                                Application.DocumentManager.MdiActiveDocument = openDoc
+                                Dim isModified As Integer = System.Convert.ToInt32(Application.GetSystemVariable("DBMOD"))
+                                If isModified = 0 Then
+                                    Autodesk.AutoCAD.ApplicationServices.DocumentExtension.CloseAndDiscard(openDoc) 'Close the document as not modified
+                                Else
+                                    Autodesk.AutoCAD.ApplicationServices.DocumentExtension.CloseAndSave(openDoc, openDoc.Database.Filename)
+                                End If
+                            End If
+                        Else
+                            Return True ' A drawing is open and we cannot close it
+                        End If
+                    End If
+                Next
+            Next
+            Application.DocumentManager.MdiActiveDocument = ThisDoc 'Make sure Active Doc is as it was
+            Return False 'No Project Drawings Open
+        Catch ex As Exception
+            Throw ex
+        End Try
+    End Function
 
     ''' <summary>
     ''' Creates a new Managed Project structure in all systems
     ''' </summary>
     ''' <remarks></remarks>
-    Private Sub CreateNewProject()
+    Private Sub CreateNewProject(Optional ByVal sCopyOfProjectName As String = Nothing)
         Try
             PartNumberPattern = ItemGatewayDatabase.GetSetting("PartNumberPattern")
             ClassificationInfo = New OntologyStudioData()
@@ -109,10 +383,11 @@ Public Class ManagedACEProject
 
             'The basic Vault structure should now exist
 
-            'Now Create The Actual AutoCAD Project
-            ProjectExists = CreateACEProject()
+            'Now Create The Actual AutoCAD Project if sCopyOfProjectName is Nothing the template Project Is used, 
+            'otherwise a copy of the given project is created
+            ProjectExists = CreateACEProject(sCopyOfProjectName)
 
-            If Not ProjectExists Then Return
+            If Not ProjectExists Then Return 'something went wrong, the project was not created
 
             'List All the drawings In the Project
             ListDrawings()
@@ -130,13 +405,64 @@ Public Class ManagedACEProject
             'Ensure that the files have been checked in once
             FirstCheckInACEProjectFiles()
 
-
-
+            'Project Is sucesfully Created... and ready for editing
         Catch ex As Exception
             Throw New Exception("Failed Creating New Project", ex)
         End Try
+    End Sub
 
+    ''' <summary>
+    ''' Reads The Project Title From the Project Info File
+    ''' </summary>
+    ''' <remarks></remarks>
+    Private Sub ReadProjectTitle()
+        Try
+            ProjectFolder = ""
+            ProjectTitle = ""
+            FullProjectName = ""
 
+            If ProjectInfoFile Is Nothing Then Return
+            If ProjectInfoFile.Length <= 0 Then Return
+            Dim InfoFileID As Integer = DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).FetchDocumentID(ProjectInfoFile)
+            If InfoFileID <= 0 Then Return
+            'Make sure we are working with the latest version
+            DirectCast(ConnectionMgr.GetConnection(ConnectionMgrConnection.EPDM), EPDMConnection).FetchVersion(InfoFileID, 0)
+
+            Dim ManagedXmlDocument As XPathDocument = New XPathDocument(ProjectInfoFile)
+            If ManagedXmlDocument Is Nothing Then Return
+            Dim xmlNavigator As XPathNavigator = ManagedXmlDocument.CreateNavigator()
+            If xmlNavigator Is Nothing Then Return
+
+            Dim ProjectFileName As String = ""
+
+            Dim xmlNodeItterator As XPathNodeIterator = xmlNavigator.Select("SWEPDM_GENERIC_FILE_PACKAGES/FILE_PACKAGE[@TYPE='ACADE']/DATA_SOURCE")
+            If xmlNodeItterator IsNot Nothing Then
+                While (xmlNodeItterator.MoveNext()) 'There should only really be one of these
+                    ProjectFolder = xmlNodeItterator.Current.GetAttribute("PATH", "")
+                    ProjectFileName = xmlNodeItterator.Current.GetAttribute("HEADER_FILE", "")
+                End While
+            End If
+            xmlNodeItterator = Nothing
+            xmlNavigator = Nothing
+            ManagedXmlDocument = Nothing
+
+            If ProjectFolder Is Nothing Or ProjectFileName Is Nothing Then
+                ProjectFolder = ""
+                Return
+            End If
+
+            If ProjectFolder.Length <= 0 Or ProjectFileName.Length <= 0 Then
+                ProjectFolder = ""
+                Return
+            End If
+
+            ProjectTitle = IO.Path.GetFileNameWithoutExtension(ProjectFileName)
+            FullProjectName = ProjectFolder
+            If Not FullProjectName.EndsWith("\") Then FullProjectName &= "\"
+            FullProjectName &= ProjectFileName
+        Catch ex As System.Exception
+            Throw ex
+        End Try
     End Sub
 
     ''' <summary>
@@ -173,16 +499,53 @@ Public Class ManagedACEProject
                 'Check In the files
                 EpdmConn.CheckInFiles(FileIDs, False)
 
-                'following this need to check that all files are in the correct state if not transition to wip using the no set revision transistion
+                'fo llowing this need to check that all files are in the correct state if not transition to wip using the no set revision transistion
+                'This is needed as there is a bug in EPDM random files dont get transitioned
+                Dim NotWIPFileIDs As List(Of Integer) = New List(Of Integer)
+                Dim SavedSateStr As String = ""
                 For Each FileID As Integer In FileIDs
                     Dim CurrentState As String = ""
                     CurrentState = EpdmConn.QueryFileState(FileID)
                     If CurrentState Is Nothing Then Continue For
                     If String.Compare(CurrentState, "WIP") = 0 Then Continue For 'File is already in wip
-                    EpdmConn.MoveFileToState(FileID, "WIP")
+                    If SavedSateStr.Length > 0 And String.Compare(CurrentState, SavedSateStr) <> 0 Then
+                        Throw New Exception("Following Initial Check In Project File States are Ambiguous")
+                    End If
+                    If SavedSateStr.Length <= 0 Then SavedSateStr = CurrentState 'Log This as our only valid file state
+                    NotWIPFileIDs.Add(FileID)
                 Next
-            End If
 
+                If NotWIPFileIDs.Count > 0 Then
+                    'There Are Files That are not wip, Find the transition that we want to follow, all files must be in the same state
+                    Dim TransitionIDs As List(Of Integer) = EpdmConn.ListAvailableFileTransitions(NotWIPFileIDs(0))
+                    Dim ActualTransitionID As Integer = -1
+                    For Each TransitionID As Integer In TransitionIDs
+                        Dim TransitionName As String = EpdmConn.GetTransitionName(TransitionID)
+                        If TransitionName Is Nothing Then Continue For
+                        If String.Compare(TransitionName, csTransitionNameToWIP, True) = 0 Then
+                            ActualTransitionID = TransitionID
+                            Exit For
+                        End If
+                    Next
+
+                    If ActualTransitionID <= 0 Then Throw New Exception("Project Created, but Not All Files Transitioned Correctly")
+                    EpdmConn.ChangeStateFiles(NotWIPFileIDs, ActualTransitionID)
+
+                    For Each FileID As Integer In FileIDs
+                        Dim CurrentState As String = ""
+                        CurrentState = EpdmConn.QueryFileState(FileID)
+                        If CurrentState Is Nothing Then Continue For
+                        If String.Compare(CurrentState, "WIP") <> 0 Then 'File is not in wip
+                            Throw New Exception("Project Created, but Not All Files Could Not Be Transitioned To WIP")
+                        End If
+                    Next
+                End If
+
+                'End Of Bug Fix Code, all files should now be checked in and in the correct state, simply check them out
+                EpdmConn.CheckOutFiles(FileIDs)
+            Else
+                Throw New Exception("No Connection to EPDM Vault Available")
+            End If
         Catch ex As Exception
             Throw New Exception("Failed Checking In New Project Files")
         End Try
@@ -610,15 +973,18 @@ Public Class ManagedACEProject
         Next
         Result = ResultList.ToArray()
     End Sub
+
     ''' <summary>
     ''' Copies the Template AutoCAD Project
     ''' </summary>
     ''' <remarks></remarks>
-    Private Function CreateACEProject() As Boolean
+    Private Function CreateACEProject(ByVal sCopyOfProjectName As String) As Boolean
         Try
             'Get the path of tge template project
-            Dim TemplateProject As String = ItemGatewayDatabase.GetSetting("AceTemplateProject")
-
+            Dim TemplateProject As String = sCopyOfProjectName
+            If sCopyOfProjectName Is Nothing Then
+                TemplateProject = ItemGatewayDatabase.GetSetting("AceTemplateProject") ' This is a new project so use the default project
+            End If
             If Not IO.File.Exists(TemplateProject) Then Return False 'Cannot Find Template Project
 
             'Construct the path for the new project

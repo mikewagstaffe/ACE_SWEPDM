@@ -48,6 +48,15 @@ Namespace ACE_SWEPDM
         End Sub
 
 
+        <CommandMethod("EPDM_COPYPROJECT", CType((CommandFlags.Modal + CommandFlags.Session), CommandFlags))> _
+        Public Sub CopyElectricalProject()
+            If ACECommands.ConnectionMgr Is Nothing Then
+                Application.DocumentManager.MdiActiveDocument.Editor.WriteMessage("Enterprise PDM Connection is not Initialised")
+            End If
+            ACECommands.NewCopyOfElectricalProject()
+        End Sub
+
+
 
 
         '##################################################################################################################
